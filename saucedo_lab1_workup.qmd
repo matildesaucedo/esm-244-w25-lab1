@@ -1,0 +1,274 @@
+---
+title: "ESM244 Lab 1 Workup"
+author: "Matilde Saucedo"
+format: 
+  html: 
+    code-fold: true
+    toc: true
+execute:
+  eval: false
+  
+  #this section of a document is called the YAML which sets the initial conditions for the quarto
+---
+
+## Load in Data
+
+You may need to install these packages
+
+```{r}
+library(tidyverse)
+library(janitor)
+library(sf)
+library(here)
+library(tmap)
+library(ggplot2)
+```
+
+What do we need to change to get the data to load in the following chunk?
+
+```{r}
+sfo_trees_df<-read_csv(here("data","sfo_trees", "sfo_trees.csv")) |> janitor::clean_names()
+
+#tidyverse has a lot of things already in it, but instead of loading the entire data base you can just use "::" to tell the code the only thing you want it to take from that package (saves space but allows you to get access to just what you need)
+```
+
+## Part 1: Data exploration
+
+Look at `sfo_trees_df` dataframe. How many observations are there? What does the data include? Use the console to explore the data.
+
+What are some interesting questions you could ask about the data?
+
+Write them below:
+
+-   there are 197,618 observations. it looks at species, their status, address, sites, caretaker, lat and lon
+
+-   It tells us which species are found in each site
+
+-   which sites are more abundant in certain species (species richness), where are certain species found
+
+**Below we will look at legal status. How many counts of each observation by legal_status? Focus on the highest trees?**
+
+```{r}
+
+#if you run unique(sfo_trees_df$legal_status) in the console, this will show you the unique options available for that attribute of legal_status
+
+sfo_trees_plot <- sfo_trees_df %>% 
+  group_by(legal_status) %>% 
+  summarize(tree_count=n()) %>%  #this is summarize the number of trees for each legal_status category
+  slice_max(tree_count,n=5) #this is allowing you to take the tree count for only the top 5 legal statuses
+sfo_trees_plot
+
+ggplot(sfo_trees_plot, 
+       aes(x=legal_status, y=tree_count)) + 
+  labs(x= "Status", y = "Number of Trees", title="Tree Count by Legal Status") + 
+  geom_bar(stat = "identity")
+
+
+#if you are just exploring data you don't have to be creating new options
+sfo_trees_df %>% 
+  group_by(legal_status) %>% 
+  summarize(tree_count=n()) %>%  #this is summarize the number of trees for each legal_status category
+  slice_max(tree_count,n=5) %>% 
+  ggplot()+
+  geom_col(aes(x=fct_reorder(legal_status, tree_count), y=tree_count))+
+  labs(y="Tree Count", x = "Legal Status")+
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle=45, hjust=1))
+
+```
+
+### Example 2
+
+Describe what this piece of code does. Feel free to run it to help you understand.
+
+```{r}
+permitted_mta_dpw<-sfo_trees_df |> 
+  filter(legal_status == 'Permitted Site' & caretaker %in% c("MTA","DPW"))
+# the & allows you to add multiple steps within the filter step
+```
+
+What does the `%in%` do? Write an example to explain the `%in%` operator to your neighbor using the empty code chunk below
+
+```{r}
+
+#
+
+sfo_trees_df %>% 
+  filter(legal_status %in% c("Permitted Site", "Undocumented"))
+
+ex <- seq(1:10)
+ex %in% c(1,2,11) #can look to see if within a longer list you can find the listed numbers
+```
+
+### Example 3
+
+Our boss tasked us with identifying oak and pine trees in SF based on legal status, location, and planting date. Wrangle the data to plot the locations (without sf borders for now) and then summarize the number of oak and pines by legal status in a separate df. Call the wrangled dataframe `oak_pine_df` and the summary `oak_pine_count`
+
+Write pseudocode on how you would solve it: this means you write the plan of action and the steps for how you are going to write the actual code
+
+-   remove all the columns you don't need
+
+-   remove all the plants that aren't pine or oak
+
+-   summarize the counts of oak and pine
+
+Data wrangle done below:
+
+```{r}
+
+oak_pine_df <- sfo_trees_df %>% 
+  filter(str_detect(species, "Oak") | str_detect(species, "Pine")) %>% 
+#str_detect tells us to look in a column and then any time something is observed in that column it will pull it out by marking it as true or false
+  select(species, legal_status, plant_date, latitude, longitude) %>% 
+  mutate(type=ifelse(str_detect(species, "Oak"), "Oak","Pine"))
+
+```
+
+Summary stats
+
+```{r}
+oak_pine_count<-oak_pine_df |> 
+  group_by(legal_status,type) %>% 
+  summarize(count=n())
+```
+
+Plot the locations of the trees as a scatterplot
+
+```{r}
+
+ggplot(data=oak_pine_df, aes(x=longitude, y=latitude, color = type))+
+  geom_point()+
+  labs(y="Latitude", x = "Longitude")+
+  theme_minimal() +
+  theme(axis.title=element_blank())+
+  labs(color = "Tree Type",
+       caption = 'Locations of oak and pine trees in SF.')
+
+
+```
+
+### Example 4
+
+Why have a list of native trees in the data folder? To ensure that we are keeping track of which trees are non-native.
+
+```{r}
+ca_native_df<-read_csv(here('data/sfo_trees/ca_native_spp.csv'))
+
+# Why can I use this format instead of the usual here("data","folder","file")?
+```
+
+## Part 2: Analysis and maps
+
+We want to see if there was a difference in planting years between a native oak *Quercus agrifolia* and a native pine *Pinus radiata*. Wrangle the data and use an appropriate statistical test to see if there is a difference.
+
+**New Function!**
+
+How to extract the year from the plant data column when it looks like "2022-11-16"? The package `lubridate` and function `year()` pulls out year information from date formats. See the example code below.
+
+```{r}
+lubridate::year("2022-11-16")
+
+#year function within lubridate package allows us to just return the year and it just returns it as the number
+```
+
+```{r}
+
+#first we need to combine the native data frame with the original one so we know which one is which
+sfo_trees_native <- sfo_trees_df %>% 
+  separate(species, into=c('spp_sci', 'spp_common'),sep=' :: ') %>% 
+  #this will separate out the species into two new columns, one will be scientific and one will be common
+  select(starts_with('spp'), 'plant_date','legal_status','longitude', 'latitude') %>% 
+  mutate(ca_native=(spp_sci %in% ca_native_df$scientific_name))
+
+
+#now you add a column for the year
+oak_pine_year_df <- sfo_trees_native %>% 
+  filter(spp_sci %in% c('Quercus agrifolia', 'Pinus radiata')) %>% 
+  mutate(plant_year=lubridate::year(plant_date))
+
+#input into a t.test to look at comparisons
+
+t.test(plant_year~spp_sci, data=oak_pine_year_df)
+
+#results of test tells you there is a statistically signficant difference in years
+
+```
+
+Use the graph below to support your results. What does each line of code do in the ggplot?
+
+```{r}
+ggplot(oak_pine_year_df)+
+  geom_histogram(aes(x=plant_year),bins = 10)+
+  facet_wrap(~spp_sci,ncol=1)+
+  theme_minimal()
+```
+
+Plot the selected species as points with a different colors for each year and a different shape for each species
+
+### Spatial map:
+
+Follow along as the instructor walks through each code chunk. In week 7 we'll cover spatial manipulation in R in far more detail. This is just to show a pretty map for all the work we did.
+
+**Step 1**
+
+Set the coordinate reference system
+
+```{r}
+oak_pine_sf<-oak_pine_year_df |> 
+  drop_na(longitude,latitude) |> 
+  st_as_sf(coords=c("longitude","latitude")) #this tells are these are actual coordinates
+
+st_crs(oak_pine_sf)<-4326 
+
+ggplot(data=oak_pine_sf)+
+  geom_sf(aes(color=spp_sci))+
+  theme_minimal()
+```
+
+**Step 2**
+
+Read in the shape file for San Fransico.
+
+```{r}
+sfo_map <- read_sf(here("data", "sfo_map", "tl_2017_06075_roads.shp")) #here we load in the shapefile for SF
+
+#What do you think this does?
+st_transform(sfo_map, 4326) #makes sure the shapefile is still in the same reference system
+```
+
+Plot it to see the outlines of streets
+
+```{r}
+ggplot(data = sfo_map) +
+  geom_sf()
+```
+
+We have all the ingredients. How would you plot these two together to see the trees locations in the city?
+
+```{r}
+
+ggplot() +
+  geom_sf(data=sfo_map,
+          size=0.1,
+          color='darkgrey')+
+  geom_sf(data=oak_pine_sf,
+          aes(color=spp_sci),
+          size=0.5)+
+            theme_void()+
+            labs(title='Oaks and pines in SF')
+```
+
+### Interactive Maps!
+
+We can make maps interactive in R using the tmaps package (another reason why html docs are so cool).
+
+There are other packages that do similar things. Consider for your shiny apps!
+
+```{r}
+tmap_mode("view")
+
+tm_shape(oak_pine_sf)+
+  tm_dots(col='spp_sci')
+```
+
+WE ARE NOT DONE UNTIL WE SAVE, STAGE, COMMIT, AND PUSH!!!!!!
